@@ -21,7 +21,10 @@ The fast arm:
 7. runs the exact verifier under the same named permission profile;
 8. rejects unexpected changed files, failed verification, missing changes, or
    source-preimage conflicts;
-9. copies back only manifest allowlisted output files while holding a
+9. rejects post-model symlink outputs, symlink ancestors, non-regular outputs,
+   and resolved paths outside the generated staging root before hashing, then
+   repeats the output check immediately before copyback;
+10. copies back only manifest allowlisted output files while holding a
    per-fixture lock.
 
 ## Important limit

@@ -19,6 +19,7 @@ from pathlib import Path, PurePosixPath
 import random
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -178,6 +179,24 @@ def _validate_declared_file(root: Path, rel: PurePosixPath, field: str) -> None:
         raise FastLaneError(f"{field} escapes or uses a symlink: {rel.as_posix()}")
 
 
+def _require_regular_contained_file(root: Path, rel: PurePosixPath, field: str) -> Path:
+    """Reject output symlinks/ancestors before the privileged launcher reads them."""
+    path = root / rel
+    if _path_has_symlink(root, rel):
+        raise FastLaneError(f"{field} uses a symlink: {rel.as_posix()}")
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError as exc:
+        raise FastLaneError(f"{field} is missing: {rel.as_posix()}") from exc
+    if not stat.S_ISREG(mode):
+        raise FastLaneError(f"{field} is not a regular file: {rel.as_posix()}")
+    root_resolved = root.resolve(strict=True)
+    resolved = path.resolve(strict=True)
+    if not _inside(resolved, root_resolved):
+        raise FastLaneError(f"{field} escapes staging: {rel.as_posix()}")
+    return path
+
+
 def _load_manifest(fixture: Path) -> dict:
     manifest_path = fixture / MANIFEST_NAME
     if not manifest_path.is_file() or manifest_path.is_symlink():
@@ -262,7 +281,12 @@ def _validate_fixture(raw_fixture: str) -> tuple[Path, dict]:
 
 def _hash(path: Path) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise FastLaneError(f"refusing to hash non-regular or symlinked path: {path}") from exc
+    with os.fdopen(descriptor, "rb") as handle:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
@@ -271,13 +295,22 @@ def _hash(path: Path) -> str:
 def _tree_hashes(root: Path) -> dict[str, str]:
     result: dict[str, str] = {}
     for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
         relative = path.relative_to(root)
         if any(part in IGNORED_SCOPE_PARTS for part in relative.parts):
             continue
+        if path.is_symlink():
+            raise FastLaneError(f"staging tree contains a symlink: {relative.as_posix()}")
+        if not path.is_file():
+            continue
+        if not _inside(path.resolve(strict=True), root.resolve(strict=True)):
+            raise FastLaneError(f"staging tree path escapes its root: {relative.as_posix()}")
         result[relative.as_posix()] = _hash(path)
     return result
+
+
+def _validate_stage_outputs(stage: Path, manifest: dict) -> None:
+    for rel in manifest["allowed_writes"]:
+        _require_regular_contained_file(stage, rel, "staged output")
 
 
 def _changed_files(before: dict[str, str], after: dict[str, str]) -> list[str]:
@@ -300,7 +333,11 @@ def _source_preimages(fixture: Path, manifest: dict) -> dict[str, str | None]:
 def _preimage_conflicts(fixture: Path, expected: dict[str, str | None]) -> dict:
     conflicts = {}
     for raw, expected_hash in expected.items():
-        path = fixture / PurePosixPath(raw)
+        rel = PurePosixPath(raw)
+        path = fixture / rel
+        if _path_has_symlink(fixture, rel):
+            conflicts[raw] = {"expected": expected_hash, "actual": "SYMLINK"}
+            continue
         actual_hash = _hash(path) if path.is_file() else None
         if actual_hash != expected_hash:
             conflicts[raw] = {"expected": expected_hash, "actual": actual_hash}
@@ -803,7 +840,13 @@ def _run_fast_locked(
         fast=True,
     )
     verification = _run_verification(stage, run_root, "fast", manifest, timeout)
-    after = _tree_hashes(stage)
+    output_structure_error = None
+    try:
+        _validate_stage_outputs(stage, manifest)
+        after = _tree_hashes(stage)
+    except FastLaneError as exc:
+        output_structure_error = str(exc)
+        after = before
     changed = _changed_files(before, after)
     allowed = {path.as_posix() for path in manifest["allowed_writes"]}
     unexpected = sorted(set(changed) - allowed)
@@ -812,6 +855,8 @@ def _run_fast_locked(
     permission = arm["runtime_permission_evidence"]
     if arm["codex_exit_code"] != 0:
         blockers.append(f"codex exec returned {arm['codex_exit_code']}")
+    if output_structure_error:
+        blockers.append(output_structure_error)
     if permission is None:
         blockers.append("active permission profile could not be read back")
     elif (permission.get("active_permission_profile") or {}).get("id") != PROFILE_ID:
@@ -830,13 +875,23 @@ def _run_fast_locked(
     status = "PASS" if not blockers else "FAIL"
     if status == "PASS" and copyback:
         for rel in manifest["allowed_writes"]:
-            source = stage / rel
+            source = _require_regular_contained_file(stage, rel, "staged output before copyback")
             destination = fixture / rel
-            if not source.is_file():
-                raise FastLaneError(f"declared output is not a file: {rel.as_posix()}")
+            if _path_has_symlink(fixture, rel) or not _inside(
+                destination.parent.resolve(strict=True), fixture.resolve(strict=True)
+            ):
+                raise FastLaneError(f"COPYBACK_CONFLICT: destination path changed: {rel.as_posix()}")
             destination.parent.mkdir(parents=True, exist_ok=True)
             temporary = destination.with_name(destination.name + f".fast-lane-{uuid.uuid4().hex}.tmp")
-            shutil.copy2(source, temporary)
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                descriptor = os.open(source, flags)
+            except OSError as exc:
+                raise FastLaneError(
+                    f"staged output changed before copyback: {rel.as_posix()}"
+                ) from exc
+            with os.fdopen(descriptor, "rb") as source_handle, temporary.open("xb") as target_handle:
+                shutil.copyfileobj(source_handle, target_handle)
             os.replace(temporary, destination)
 
     receipt = {
@@ -893,13 +948,21 @@ def _run_baseline(
         fast=True,
     )
     verification = _run_verification(stage, run_root, "ordinary", manifest, timeout)
-    after = _tree_hashes(stage)
+    output_structure_error = None
+    try:
+        _validate_stage_outputs(stage, manifest)
+        after = _tree_hashes(stage)
+    except FastLaneError as exc:
+        output_structure_error = str(exc)
+        after = before
     changed = _changed_files(before, after)
     allowed = {path.as_posix() for path in manifest["allowed_writes"]}
     unexpected = sorted(set(changed) - allowed)
     blockers = []
     if arm["codex_exit_code"] != 0:
         blockers.append(f"codex exec returned {arm['codex_exit_code']}")
+    if output_structure_error:
+        blockers.append(output_structure_error)
     permission = arm["runtime_permission_evidence"]
     if permission is None:
         blockers.append("active permission profile could not be read back")
@@ -932,10 +995,11 @@ def _run_baseline(
 
 
 def _output_hashes(root: Path, manifest: dict) -> dict[str, str | None]:
-    return {
-        rel.as_posix(): _hash(root / rel) if (root / rel).is_file() else None
-        for rel in manifest["allowed_writes"]
-    }
+    result = {}
+    for rel in manifest["allowed_writes"]:
+        path = _require_regular_contained_file(root, rel, "comparison output")
+        result[rel.as_posix()] = _hash(path)
+    return result
 
 
 def _percent_change(fast: int | float, ordinary: int | float) -> float | None:
@@ -1142,9 +1206,17 @@ def _compare(args: argparse.Namespace) -> int:
         for name in names:
             receipts[name] = runners[name]()
 
-    ordinary_outputs = _output_hashes(Path(receipts["ordinary"]["staging_directory"]), manifest)
-    fast_outputs = _output_hashes(Path(receipts["fast"]["staging_directory"]), manifest)
-    outputs_equal = ordinary_outputs == fast_outputs
+    output_hash_error = None
+    outputs_equal = False
+    if receipts["ordinary"]["status"] == "PASS" and receipts["fast"]["status"] == "PASS":
+        try:
+            ordinary_outputs = _output_hashes(
+                Path(receipts["ordinary"]["staging_directory"]), manifest
+            )
+            fast_outputs = _output_hashes(Path(receipts["fast"]["staging_directory"]), manifest)
+            outputs_equal = ordinary_outputs == fast_outputs
+        except FastLaneError as exc:
+            output_hash_error = str(exc)
     outcome = _comparison_outcome(receipts["ordinary"], receipts["fast"], outputs_equal)
     ordinary_usage = receipts["ordinary"].get("usage") or {}
     fast_usage = receipts["fast"].get("usage") or {}
@@ -1161,6 +1233,7 @@ def _compare(args: argparse.Namespace) -> int:
         "reasoning_effort": args.effort,
         "effective_boundary": boundary,
         "outputs_byte_identical": outputs_equal,
+        "output_hash_error": output_hash_error,
         "ordinary": receipts["ordinary"],
         "fast": receipts["fast"],
         "difference": {

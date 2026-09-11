@@ -241,6 +241,64 @@ class FastLaneTests(unittest.TestCase):
             saved = json.loads((run_root / "receipt.json").read_text(encoding="utf-8"))
             self.assertTrue(saved["copyback_performed"])
 
+    def test_symlinked_staged_output_cannot_pass_or_copy_back(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            fixture = self.make_fixture(root)
+            _, manifest = fastlane._validate_fixture(str(fixture))
+            run_root = root / "run"
+            outside = root / "outside-sentinel.txt"
+            outside.write_text("SYNTHETIC_SECRET_SENTINEL\n", encoding="utf-8")
+
+            def fake_model_arm(**kwargs):
+                output = kwargs["stage"] / "src/work.py"
+                output.unlink()
+                output.symlink_to(outside)
+                return {
+                    "codex_exit_code": 0,
+                    "elapsed_seconds": 1.0,
+                    "usage": {"input_tokens": 10},
+                    "tool_calls": 1,
+                    "thread_id": "test",
+                    "runtime_permission_evidence": {
+                        "active_permission_profile": {"id": fastlane.PROFILE_ID},
+                        "permission_profile_type": "managed",
+                        "sandbox_policy_type": "workspace-write",
+                        "cwd": str(kwargs["stage"]),
+                    },
+                    "final": str(run_root / "final.txt"),
+                    "events": str(run_root / "events.jsonl"),
+                    "stderr": str(run_root / "stderr.txt"),
+                }
+
+            def fake_verification(*args, **kwargs):
+                return {"exit_code": 0, "elapsed_seconds": 0.1, "stdout": "out", "stderr": "err"}
+
+            attestation = {
+                "FAST_LANE_SEMANTIC_SELF_CONTAINMENT": "PASS",
+                "TASK_PACKET_CONTAINS_ALL_DECISION_RELEVANT_INVARIANTS": "YES",
+                "DURABLE_OR_EXTERNAL_CONTEXT_DEPENDENCY": "NONE",
+            }
+            with (
+                mock.patch.object(fastlane, "_run_model_arm", side_effect=fake_model_arm),
+                mock.patch.object(fastlane, "_run_verification", side_effect=fake_verification),
+            ):
+                receipt = fastlane._run_fast_locked(
+                    fixture,
+                    manifest,
+                    attestation,
+                    "gpt-example",
+                    "low",
+                    10,
+                    run_root,
+                    copyback=True,
+                )
+
+            self.assertEqual(receipt["status"], "FAIL")
+            self.assertFalse(receipt["copyback_performed"])
+            self.assertTrue(any("symlink" in blocker for blocker in receipt["blockers"]))
+            self.assertEqual((fixture / "src/work.py").read_text(encoding="utf-8"), "VALUE = 1\n")
+
 
 if __name__ == "__main__":
     unittest.main()
