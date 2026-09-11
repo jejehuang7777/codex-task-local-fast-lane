@@ -1,0 +1,40 @@
+default_permissions = "task-local-fast-lane"
+web_search = "disabled"
+notify = []
+
+[features]
+apps = false
+plugins = false
+memories = false
+multi_agent = false
+browser_use = false
+computer_use = false
+in_app_browser = false
+workspace_dependencies = false
+hooks = false
+
+[shell_environment_policy]
+inherit = "none"
+include_only = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE"]
+
+[permissions.task-local-fast-lane]
+description = "No-network, isolated-fixture execution for an explicitly attested task packet."
+
+[permissions.task-local-fast-lane.filesystem]
+":root" = "deny"
+":minimal" = "read"
+"/opt/homebrew" = "read"
+"/usr/local" = "read"
+"~/.cache/codex-runtimes/codex-primary-runtime/dependencies" = "read"
+
+[permissions.task-local-fast-lane.filesystem.":workspace_roots"]
+"." = "write"
+"**/.env" = "deny"
+"**/.env.*" = "deny"
+"**/*.pem" = "deny"
+"**/*.key" = "deny"
+"**/*credential*" = "deny"
+"**/*secret*" = "deny"
+
+[permissions.task-local-fast-lane.network]
+enabled = false

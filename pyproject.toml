@@ -1,0 +1,16 @@
+[project]
+name = "codex-task-local-fast-lane"
+version = "0.1.0b1"
+description = "A fail-closed, task-local A/B runner for bounded Codex work"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+[project.scripts]
+codex-fast-lane = "fastlane:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["fastlane"]

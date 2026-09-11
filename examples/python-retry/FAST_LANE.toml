@@ -1,0 +1,38 @@
+schema_version = 1
+profile = "task-local-fast-lane"
+task_id = "EXAMPLE-PYTHON-RETRY"
+task_file = "TASK.md"
+allowed_reads = [
+  "TASK.md",
+  "SPEC.md",
+  "src/__init__.py",
+  "src/retry_policy.py",
+  "tests/__init__.py",
+  "tests/test_retry_policy.py",
+]
+runtime_reads = []
+baseline_reads = [
+  "AGENTS.md",
+  "README.md",
+  "docs/architecture.md",
+  "docs/testing.md",
+]
+allowed_writes = ["src/retry_policy.py"]
+prohibited_reads = [".env", "secrets/private.key"]
+verification = ["python3", "-m", "unittest", "-v"]
+definition_of_done = [
+  "all seven tests pass",
+  "only src/retry_policy.py changes",
+  "the public signature and validation remain unchanged",
+]
+disposable_fixture = true
+contains_sensitive_data = false
+requires_network = false
+requires_external_context = false
+requires_account_data = false
+requires_secrets = false
+changes_deployment = false
+changes_runtime = false
+changes_permissions = false
+changes_public_state = false
+changes_canonical_authority = false
