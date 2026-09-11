@@ -42,6 +42,11 @@ when Codex changes its profile schema. See OpenAI's official
 
 ## Five-minute safe trial
 
+> **Usage warning:** `compare` launches two hosted Codex model runs, sends the
+> declared synthetic task files to the Codex service, and each arm may consume
+> account limits or billed usage. The no-network profile restricts local tool
+> commands, not the Codex service connection.
+
 ```bash
 git clone https://github.com/jejehuang7777/codex-task-local-fast-lane.git
 cd codex-task-local-fast-lane
