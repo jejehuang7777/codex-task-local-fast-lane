@@ -1,5 +1,7 @@
 # Codex Task-Local Fast Lane
 
+[English](README.md) | [繁體中文](README.zh-TW.md)
+
 A fail-closed beta for measuring and running **small, self-contained Codex
 tasks** without dragging an unrelated repository history into every model turn.
 
