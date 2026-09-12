@@ -16,7 +16,19 @@ Fast 執行組會：
 7. 在同一指定權限 profile 下執行精確 verifier；
 8. 拒絕未預期變更檔案、驗證失敗、沒有產生變更或來源 preimage 衝突；
 9. 在 hashing 前拒絕模型執行後才出現的 symlink 輸出、symlink ancestors、非一般檔案與解析後位於 staging root 外的路徑，並在 copyback 前立即重複這項檢查；
-10. 持有每個 fixture 的專用 lock 時，只寫回 manifest allowlist 內的輸出檔案。
+10. 在取得 startup preimages 時，同時綁定 fixture、輸出父目錄與既有目的檔案的 device／inode／file type；
+11. 透過不跟隨 symlink 的目錄把手準備、備份與替換輸出，不在 commit 時重新解析可被更換的路徑字串；若綁定的路徑樹改變，回傳 `RECOVERY_REQUIRED`；
+12. 變更 fixture 以前先準備並雜湊所有 allowlisted 輸出，保留既有目的檔案權限，並在持有每個 fixture 的專用 lock 時寫入 transaction journal；
+13. 後續替換失敗時復原先前已替換的輸出；若復原不完整，保留備份並將結果標成需要人工處理；
+14. 以專用 process group 啟動 verifier／model 指令並記錄 timeout 清理證據；POSIX 下無法證明刻意用 `setsid`／`setpgid` 脫離的後代已結束，因此逾時結果 fail closed，不做 copyback；
+15. 在 durable copyback journal 記錄 fixture 與 source preimages；若 journal 沒有可信終態，之後同一 fixture 的執行會在模型啟動前被 restart fence 擋下；
+16. 驗證 journal digest、schema、transaction identity、路徑 identity、allowed writes、preimages、artifact／檔案狀態一致性與終態證據；
+17. 把可信的終態 journal digest／status 封存在另一份 owned run marker；只有重新計算的現場 fixture hashes 與 journal 終態完全相符時才寫 seal；journal 與 marker 都先 fsync 檔案、rename，再 fsync 所在目錄；
+18. 準備檔、備份目錄項、fixture replace、rollback replace／unlink、cleanup unlink 與新建目錄的變更，都先完成對應 fsync，才讓 transaction journal 前進到下一個 durable 狀態；
+19. copyback 開始以前，會逐層 durable 建立 state／run 目錄祖先並 durable 寫入初始 owned run marker，避免 fixture replace 已留存、但 restart-fence 整個目錄項因未 sync 而消失。
+
+安裝或更新 profile 時也會拒絕 symlink／非一般檔案目的地，並使用同一種不跟隨連結的目錄把手替換方式。
+路徑標籤或 filesystem identity 衝突一律使操作失敗，不會成為跟隨替代目標的理由。
 
 ## 重要限制
 
@@ -40,6 +52,10 @@ Ordinary 組刻意允許讀取較多的倉庫上下文，但 ordinary 與 fast �
 
 每個 fixture 的專用 lock 會防止兩個 launcher 同時寫入同一來源。程式異常中斷可能在
 `~/.codex-fast-lane/locks/` 留下過期 lock。手動移除該單一 lock 目錄前，請先確認沒有相關行程仍在執行。
+
+多檔 copyback 是應用層的 prepare／commit／rollback protocol，不是整個檔案系統的原子 transaction。
+一般替換失敗會復原並寫入 journal；commit 期間若遇到斷電或儲存裝置錯誤，仍可能需要依 transaction
+證據中的 `.fast-lane-*.bak` 手動復原。`ROLLBACK_FAILED` 與 `RECOVERY_REQUIRED` 都不是可採用的成功結果。
 
 ## 回報安全漏洞
 

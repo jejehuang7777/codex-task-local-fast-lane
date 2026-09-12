@@ -44,3 +44,23 @@
 在成功配對之前，曾有一個 MCP override key 產生無效 TOML 語法。Preflight 在啟動任何模型前就拒絕執行，
 並返回 `INVALID_COMPARISON`。修正 key writer、回讀確認已設定的 MCP servers 全部關閉後，才重新執行 A/B 自測。
 被保留的失敗 receipt 用來證明：當邊界無法證明時，程式會停止，而不是靜默放寬權限。
+
+## 反向順序 candidate 複驗
+
+吸收外部對測量方式、staging／copyback 與 path identity 的審查後，耐斷電修補前的 `0.1.0b2`
+candidate 使用相同的 `gpt-5.6-sol / medium` 設定，依相反執行順序各跑一次。
+
+| 順序 | 執行組 | 驗證 | 變更檔案 | Input | Cached input | Output | Reasoning output | 工具 | 耗時 |
+|---|---|---|---|---:|---:|---:|---:|---:|---:|
+| fast-first | Ordinary | 7/7 PASS | 只有宣告檔案 | 287,569 | 252,800 | 3,888 | 1,339 | 13 | 111.748s |
+| fast-first | Fast | 7/7 PASS | 只有宣告檔案 | 60,136 | 46,720 | 824 | 174 | 3 | 25.932s |
+| ordinary-first | Ordinary | 7/7 PASS | 只有宣告檔案 | 211,376 | 187,008 | 3,648 | 1,018 | 12 | 90.119s |
+| ordinary-first | Fast | 7/7 PASS | 只有宣告檔案 | 60,254 | 46,848 | 775 | 112 | 3 | 28.814s |
+
+兩組都回傳 `HELPED`：input 分別變化 -79.09% 與 -71.49%，耗時分別變化
+-76.79% 與 -68.03%。兩組皆由程式化驗證與 changed-file scope 證明結果等價；
+輸出也剛好逐位元組一致，而且原始 fixture 沒有被修改。
+
+用量欄位完全依 Codex receipt 分開保存。Cached input 不會再加到 input 上，本文件也不把
+這些計數換算成價格，因為 receipt 無法證明個別帳戶的計費公式。這仍然只是同一個合成任務的
+兩次執行，不是一般正確率或節省幅度的 benchmark。

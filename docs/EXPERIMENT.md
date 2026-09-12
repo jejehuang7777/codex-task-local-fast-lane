@@ -55,3 +55,27 @@ syntax. Preflight rejected it before either model arm started and returned
 read back as disabled, and only then was the A/B self-test rerun. The retained
 failed receipt is evidence that an unproven boundary stops rather than silently
 widening access.
+
+## Counter-ordered candidate recheck
+
+After incorporating external review on measurement, staging/copyback, and path
+identity, the pre-durability-patch `0.1.0b2` candidate was rerun twice with the same
+`gpt-5.6-sol / medium` model setting and opposite arm orders.
+
+| Order | Arm | Verifier | Changed files | Input | Cached input | Output | Reasoning output | Tools | Elapsed |
+|---|---|---|---|---:|---:|---:|---:|---:|---:|
+| fast-first | Ordinary | 7/7 PASS | declared file only | 287,569 | 252,800 | 3,888 | 1,339 | 13 | 111.748s |
+| fast-first | Fast | 7/7 PASS | declared file only | 60,136 | 46,720 | 824 | 174 | 3 | 25.932s |
+| ordinary-first | Ordinary | 7/7 PASS | declared file only | 211,376 | 187,008 | 3,648 | 1,018 | 12 | 90.119s |
+| ordinary-first | Fast | 7/7 PASS | declared file only | 60,254 | 46,848 | 775 | 112 | 3 | 28.814s |
+
+Both pairs returned `HELPED`; input changed by -79.09% and -71.49%, while
+elapsed time changed by -76.79% and -68.03%. In both pairs, programmatic
+verification and changed-file scope established equivalence, outputs also
+happened to be byte-identical, and the original fixture remained unchanged.
+
+The usage columns are kept separate exactly as reported by Codex. Cached input
+is not added to input, and this document does not convert the counters into a
+price claim because the receipt does not establish an account-specific billing
+formula. These are still two executions of one synthetic task, not a general
+accuracy or savings benchmark.

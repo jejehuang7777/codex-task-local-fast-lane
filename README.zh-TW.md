@@ -16,14 +16,22 @@
 - `ordinary`：使用同一個本地安全 profile，另外提供事先宣告為安全的基準專案上下文；
 - `fast`：在專用權限 profile 下，只提供任務包與必要的 runtime 檔案。
 
-報告會列出精確驗證結果、變更檔案範圍、兩邊輸出是否逐位元組一致、input tokens、
-工具呼叫次數與總耗時。最後結果只有三種：
+報告會列出精確驗證結果、變更檔案範圍、兩邊輸出是否逐位元組一致、Codex 回傳的
+每一項數字型用量（分開列出）、工具呼叫次數與總耗時。結果等價的判斷基礎是兩邊都
+通過同一條程式化驗證，且變更範圍都合規；逐位元組一致是更強的診斷訊號，不是硬性
+條件，因為同一組精確測試可能容許多種正確實作。最後結果只有三種：
 
 - `HELPED`：兩邊結果等價，而 fast 使用較少 input tokens；
 - `NO_CLEAR_GAIN`：兩邊結果等價，但這一組沒有省下 input tokens；
-- `INVALID_COMPARISON`：輸出、驗證、變更範圍或用量證據不一致。即使 Token 較少，也不得推翻這個結果。
+- `INVALID_COMPARISON`：驗證、變更範圍、輸出回讀或用量證據失敗。即使 Token 較少，也不得推翻這個結果。
 
 單次 A/B 只是方向性證據。要得到較強結論，請把執行順序反過來再跑一次。
+
+如果要宣稱某一類任務的正確率，必須在執行前先定義 benchmark 與驗收方式。內附範例只測試
+harness 與一個極小修復，不是一般程式能力的 benchmark。
+
+這個 beta 不會自動選模型。A/B 兩邊都使用測試者明確指定的相同模型與推理強度。
+「日常模型失敗後自動升級強模型」屬於下一階段的獨立實驗，不在目前的安全或省量宣稱內。
 
 ## 使用要求
 
@@ -104,6 +112,20 @@ python3 fastlane.py compare examples/python-retry \
 
 執行 `compare` 或 `run` 前先跑 `preflight`。只有 `run` 可以把通過驗證、且出現在 allowlist 的輸出寫回原始 fixture；
 `compare` 永遠不會寫回。
+
+`run` 會先準備並雜湊全部輸出，再開始碰原始 fixture；寫回時保留既有檔案權限，並留下 copyback transaction journal。
+若其中一個檔案替換失敗，程式會復原先前已替換的檔案，並回傳失敗 receipt。指令逾時時，launcher 會終止本輪啟動的
+process group，並把實際清理證據寫入 receipt。POSIX 的 process group 無法證明刻意用 `setsid`／`setpgid` 脫離的後代
+程序也已結束；因此 receipt 會把整棵程序樹的清理標成「未證明」，逾時的 arm 直接 fail closed，不做 copyback。
+
+如果 launcher 在多檔 commit 中途被強制終止，尚未完成的 transaction journal 會保留下來。之後對同一 fixture 執行
+`preflight`、`compare` 或 `run` 時，程式會在持有 fixture lock 的情況下先查 journal，並在啟動模型或接受新 preimage
+以前回傳 `RECOVERY_REQUIRED`。這是一道重啟閘門，不代表程式會自行猜測如何復原。
+閘門會驗證 journal digest、schema、transaction id、write set、preimage、artifact／檔案狀態一致性與終態證據；只把
+殘缺 journal 的 status 改成 `ROLLED_BACK`，不會打開閘門。
+正常終態還必須由另一份 owned run marker 封存 journal 狀態與 digest。crash 後即使把 status、restore 清單、hash 與
+digest 改成彼此一致，缺少這份 seal 仍然是 `RECOVERY_REQUIRED`。launcher 寫 seal 前會重新計算現場 fixture hashes，
+必須和 journal 宣稱的 terminal hashes 完全一致。
 
 ## 卸載
 

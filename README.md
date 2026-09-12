@@ -19,16 +19,28 @@ profile, verifies the result, and refuses copyback when proof is incomplete.
 - `fast`: only the task packet and required runtime files, under the dedicated
   permission profile.
 
-It reports exact verifier status, changed-file scope, byte-identical outputs,
-input tokens, tool calls, and elapsed time. The final result is one of:
+It reports exact verifier status, changed-file scope, whether outputs are
+byte-identical, every numeric usage component returned by Codex (kept
+separate), tool calls, and elapsed time. Programmatic verification plus the
+declared changed-file boundary is the equivalence gate; byte identity is a
+stronger diagnostic signal, not a requirement, because more than one valid
+implementation may satisfy the same exact tests. The final result is one of:
 
 - `HELPED`: both runs are equivalent and the fast arm used fewer input tokens;
 - `NO_CLEAR_GAIN`: both runs are equivalent but this pair did not save input;
-- `INVALID_COMPARISON`: output, verification, scope, or usage proof did not
-  match. A lower token number never overrides this result.
+- `INVALID_COMPARISON`: verification, scope, output-readback, or usage proof
+  failed. A lower token number never overrides this result.
 
 One pair is directional evidence only. Run a second pair with the opposite
 order before drawing a stronger conclusion.
+
+For claims about correctness across a class of tasks, define the benchmark and
+acceptance checks before running it. The bundled example tests the harness and
+one tiny repair; it is not a general coding-quality benchmark.
+
+This beta does not choose a model automatically. Both A/B arms use the model
+and effort that the tester names. Automatic daily/strong-model escalation is a
+separate future experiment, not part of the current safety or savings claim.
 
 ## Requirements
 
@@ -118,6 +130,29 @@ targets must also appear in `allowed_reads`.
 Run `preflight` before `compare` or `run`. `run` is the only command that can
 copy verified allowlisted outputs back to its source fixture; `compare` never
 does.
+
+`run` prepares and hashes every output before touching the fixture, preserves
+the existing destination mode, and records a copyback transaction journal. If
+one replacement fails, it rolls back files already replaced and returns a
+failed receipt. Command timeouts terminate the launched process group and add
+literal cleanup evidence to the receipt. On POSIX, process-group cleanup cannot
+prove termination of a descendant that deliberately detaches with
+`setsid`/`setpgid`; the receipt therefore leaves whole-tree cleanup unconfirmed
+and the timed-out arm fails closed with no copyback.
+
+If the launcher itself is killed during a multi-file commit, the durable
+transaction journal remains non-terminal. Every later `preflight`, `compare`,
+or `run` for that exact fixture checks the journal while holding the fixture
+lock and stops with `RECOVERY_REQUIRED` before launching a model or accepting a
+new preimage. This is a restart fence, not an automatic recovery claim.
+The fence validates the journal digest, schema, transaction id, write set,
+preimages, artifact/file-state consistency, and terminal evidence; changing an
+incomplete journal's status word to `ROLLED_BACK` does not open the gate.
+Terminal completion is also sealed in the separately owned run marker. A
+self-consistent rewrite of journal status, restore lists, hashes, and digest
+after a crash still lacks that seal and remains `RECOVERY_REQUIRED`. Before the
+trusted launcher writes the seal, it recomputes the live fixture hashes and
+requires an exact match with the claimed terminal hashes.
 
 ## Uninstall
 
